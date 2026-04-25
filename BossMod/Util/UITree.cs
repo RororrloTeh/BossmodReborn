@@ -1,4 +1,4 @@
-﻿using Dalamud.Bindings.ImGui;
+using Dalamud.Bindings.ImGui;
 
 namespace BossMod;
 
@@ -37,12 +37,24 @@ public sealed class UITree
     // expected usage is 'foreach (_ in Node(...)) { draw subnodes... }'
     public IEnumerable<object?> Node(string text, bool leaf = false, uint color = default, Action? contextMenu = null, Action? doubleClick = null, Action? select = null)
     {
-        if (RawNode(text, leaf, color == default ? Colors.TextColor1 : color, contextMenu, doubleClick, select))
+        // RawNode calls ImGui.PushID; we MUST balance with PopID even if the caller's
+        // foreach body throws or breaks early. Without try/finally the iterator's Dispose
+        // path skips everything after `yield return`, leaving the ImGui ID stack and
+        // tree-node stack imbalanced — which manifests as a delayed access violation
+        // inside cimgui.dll on a subsequent frame (often when the Settings window is
+        // drawn or when state changes invalidate stale IDs).
+        var open = RawNode(text, leaf, color == default ? Colors.TextColor1 : color, contextMenu, doubleClick, select);
+        try
         {
-            yield return null;
-            ImGui.TreePop();
+            if (open)
+                yield return null;
         }
-        ImGui.PopID();
+        finally
+        {
+            if (open)
+                ImGui.TreePop();
+            ImGui.PopID();
+        }
     }
 
     // draw a node for each element in collection
@@ -51,12 +63,22 @@ public sealed class UITree
         foreach (var t in collection)
         {
             var props = map(t);
-            if (RawNode(props.Text, props.Leaf, props.Colors, contextMenu != null ? () => contextMenu(t) : null, doubleClick != null ? () => doubleClick(t) : null, select != null ? () => select(t) : null))
+            // Same try/finally rationale as Node() above — see comment there.
+            var open = RawNode(props.Text, props.Leaf, props.Colors,
+                contextMenu != null ? () => contextMenu(t) : null,
+                doubleClick != null ? () => doubleClick(t) : null,
+                select != null ? () => select(t) : null);
+            try
             {
-                yield return t;
-                ImGui.TreePop();
+                if (open)
+                    yield return t;
             }
-            ImGui.PopID();
+            finally
+            {
+                if (open)
+                    ImGui.TreePop();
+                ImGui.PopID();
+            }
         }
     }
 
