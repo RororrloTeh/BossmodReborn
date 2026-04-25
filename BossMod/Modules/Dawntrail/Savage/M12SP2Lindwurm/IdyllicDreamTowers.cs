@@ -4,17 +4,25 @@ namespace BossMod.Dawntrail.Savage.M12S2Lindwurm;
 
 sealed class IdyllicDreamArena(BossModule module) : Components.GenericAOEs(module)
 {
+    // KR fix: arena center can vary by region/build; build platform bounds with relative
+    // coords (centered at arena origin) so the same instance works regardless of Arena.Center.
     private static readonly ArenaBoundsCustom PlatformBounds = BuildPlatformBounds();
     private static readonly AOEShapeCustom InversePlatformShape = BuildInverseShape();
     private readonly AOEInstance[] _aoe = new AOEInstance[1];
 
     private DateTime _activation;
 
+    // Pending transform state. When a Predict(...) call sets a target state and a future
+    // activation time, Update() applies the actual Arena.Bounds / State change once the
+    // activation time elapses — this is the cast-event-driven fallback for the MapEffect path.
+    private DateTime _pendingTransitionAt;
+    private int _pendingState = -1;
+
     public int State { get; private set; }
 
     private static ArenaBoundsCustom BuildPlatformBounds()
     {
-        // two 10y circles centered ±14 from arena center
+        // two 10y circles centered ±14 from arena center (relative coords)
         Shape[] union =
         [
             new Circle(new(-14, 0), 10),
@@ -41,30 +49,78 @@ sealed class IdyllicDreamArena(BossModule module) : Components.GenericAOEs(modul
         return new AOEShapeCustom(arena, subtract);
     }
 
+    // Platform world centers, derived from arena center so this works regardless of where
+    // the encounter is anchored. Original code hardcoded (114, 100) and (86, 100).
+    private WPos PlatformCenterEast => Arena.Center + new WDir(14f, 0f);
+    private WPos PlatformCenterWest => Arena.Center + new WDir(-14f, 0f);
+
     public override void OnMapEffect(byte index, uint state)
     {
-        if (index != 0x21)
-            return;
-
+        // KR fix: previously this was gated on `index == 0x21`. The KR client appears to
+        // emit this MapEffect with a different index (or not at all in some cases), which
+        // froze the State at 0 and prevented the state machine from advancing past the
+        // first "Platforms appear" condition (so subsequent components — and therefore the
+        // radar — never activated). Match on the state value alone; the state bitmasks
+        // observed below are platform-transform-specific and unlikely to collide with
+        // unrelated effects in this encounter.
         switch (state)
         {
             case 0x00200010:
+                // platforms about to appear (~9.1s)
                 _activation = WorldState.FutureTime(9.1f);
                 break;
 
             case 0x00800040:
             case 0x02000040:
-                _activation = default;
-                Arena.Bounds = PlatformBounds;
-                State = 1;
+                ApplyTransform(1);
                 break;
 
             case 0x01000001:
-                _activation = default;
-                Arena.Bounds = new ArenaBoundsCircle(20);
-                State = 0;
+                ApplyTransform(0);
                 break;
         }
+    }
+
+    public override void OnEventCast(Actor caster, ActorCastEvent spell)
+    {
+        // Cast-event fallback for the State==1 ("platforms appear") transition. Downfall is
+        // cast exactly once in this fight and is immediately followed by the platform
+        // transform — if the MapEffect didn't arrive (KR), use this to schedule the change.
+        if ((AID)spell.Action.ID == AID.Downfall && _pendingState != 1 && State != 1)
+        {
+            // Downfall finishes ~0.9s before platforms appear in awgil/CR timings.
+            SchedulePending(1, 0.9f);
+        }
+    }
+
+    public override void Update()
+    {
+        if (_pendingState >= 0 && WorldState.CurrentTime >= _pendingTransitionAt)
+        {
+            var target = _pendingState;
+            _pendingState = -1;
+            _pendingTransitionAt = default;
+            if (State != target)
+                ApplyTransform(target);
+        }
+    }
+
+    private void ApplyTransform(int newState)
+    {
+        _activation = default;
+        _pendingState = -1;
+        _pendingTransitionAt = default;
+        State = newState;
+        Arena.Bounds = newState == 1 ? PlatformBounds : new ArenaBoundsCircle(20);
+    }
+
+    private void SchedulePending(int targetState, float seconds)
+    {
+        _pendingState = targetState;
+        _pendingTransitionAt = WorldState.FutureTime(seconds);
+        // surface the inverse-AOE telegraph during the wait when shrinking to platforms
+        if (targetState == 1)
+            _activation = _pendingTransitionAt;
     }
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
@@ -82,7 +138,7 @@ sealed class IdyllicDreamArena(BossModule module) : Components.GenericAOEs(modul
             return;
 
         var pos = actor.Position;
-        if (!pos.InCircle(new(114, 100), 10) && !pos.InCircle(new(86, 100), 10))
+        if (!pos.InCircle(PlatformCenterEast, 10) && !pos.InCircle(PlatformCenterWest, 10))
             hints.Add("Go to platform!");
     }
 
@@ -93,17 +149,30 @@ sealed class IdyllicDreamArena(BossModule module) : Components.GenericAOEs(modul
             hints.AddForbiddenZone(
                 new SDOutsideOfUnion(
                 [
-                    new SDInvertedCircle(new(114, 100), 10),
-                    new SDInvertedCircle(new(86, 100), 10)
+                    new SDInvertedCircle(PlatformCenterEast, 10),
+                    new SDInvertedCircle(PlatformCenterWest, 10)
                 ]),
                 _activation
             );
         }
     }
 
-    public void Predict(float seconds)
+    // Predict(seconds): default behavior — schedule platforms to appear (State 1).
+    // Predict(seconds, targetState): explicit form, lets the state machine schedule the
+    // disappear transition (State 0) too, removing the dependency on MapEffect entirely.
+    public void Predict(float seconds) => Predict(seconds, 1);
+
+    public void Predict(float seconds, int targetState)
     {
-        _activation = WorldState.FutureTime(seconds);
+        if (targetState == 1)
+        {
+            _activation = WorldState.FutureTime(seconds);
+            SchedulePending(1, seconds);
+        }
+        else
+        {
+            SchedulePending(0, seconds);
+        }
     }
 }
 
