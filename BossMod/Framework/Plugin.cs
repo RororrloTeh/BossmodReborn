@@ -1,4 +1,4 @@
-﻿using BossMod.Autorotation;
+using BossMod.Autorotation;
 using Dalamud.Common;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Interface;
@@ -37,6 +37,7 @@ public sealed class Plugin : IDalamudPlugin
     private DateTime _throttleJump;
     private DateTime _throttleInteract;
     private DateTime _throttleFateSync;
+    private DateTime _throttleLeaveDuty;
 
     // windows
     private readonly ConfigUI _configUI; // TODO: should be a proper window!
@@ -96,7 +97,7 @@ public sealed class Plugin : IDalamudPlugin
         _rotation = new(_rotationDB, _bossmod, _hints);
         _ai = new(_rotation, _amex, _movementOverride);
         _broadcast = new();
-        _ipc = new(_rotation, _amex, _movementOverride, _ai);
+        _ipc = new(_bossmod, _hints, _rotation, _amex, _movementOverride, _ai, _hintsBuilder.Obstacles);
         _dtr = new(_rotation, _ai);
         _mbox = new(_rotation, _ws);
         _wndBossmod = new(_bossmod, _zonemod);
@@ -308,6 +309,12 @@ public sealed class Plugin : IDalamudPlugin
             _throttleJump = _ws.FutureTime(0.1d);
         }
 
+        if (_hints.ShouldLeaveDuty && _ws.CurrentTime >= _throttleLeaveDuty)
+        {
+            EventFramework.LeaveCurrentContent(false);
+            _throttleLeaveDuty = _ws.FutureTime(1d);
+        }
+
         if ((AI.AIManager.Instance?.Beh != null || Autorotation.MiscAI.NormalMovement.Instance != null) && CheckInteractRange(_ws.Party.Player(), _hints.InteractWithTarget))
         {
             // many eventobj interactions "immediately" start some cast animation (delayed by server roundtrip), and if we keep trying to move toward the target after sending the interact request, it will be canceled and force us to start over
@@ -348,10 +355,9 @@ public sealed class Plugin : IDalamudPlugin
             return false;
 
         // treasure chests have no client-side interact range check at all; just assume they use the standard "small" range, seems to be accurate from testing
-        if (targetObj->ObjectKind is FFXIVClientStructs.FFXIV.Client.Game.Object.ObjectKind.Treasure)
-            return player?.DistanceToHitbox(target) <= 2.09f;
-
-        return EventFramework.Instance()->CheckInteractRange(playerObj, targetObj, 1, false);
+        return targetObj->ObjectKind is FFXIVClientStructs.FFXIV.Client.Game.Object.ObjectKind.Treasure
+            ? player?.DistanceToHitbox(target) <= 2.09f
+            : EventFramework.Instance()->CheckInteractRange(playerObj, targetObj, 1, false);
     }
 
     private unsafe void HandleFateSync()

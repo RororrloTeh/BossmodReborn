@@ -14,7 +14,7 @@
 </PropertyGroup>
 
   <PropertyGroup>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
     <Platforms>x64</Platforms>
     <Nullable>enable</Nullable>
     <LangVersion>preview</LangVersion>
@@ -22,7 +22,8 @@
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
-    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <GenerateDependencyFile>false</GenerateDependencyFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -41,6 +42,7 @@
 
   <PropertyGroup>
     <DalamudLibPath>$(appdata)\XIVLauncher\addon\Hooks\dev\</DalamudLibPath>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform($([System.Runtime.InteropServices.OSPlatform]::Linux)))'">
@@ -48,10 +50,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="DalamudPackager" Version="14.0.1" />
+    <PackageReference Include="DalamudPackager" Version="14.0.2" />
     <PackageReference Include="PInvoke.User32" Version="0.7.124" />
     <PackageReference Include="TerraFX.Interop.Windows" Version="10.0.26100" />
-    <ProjectReference Include="..\FFXIVClientStructs\FFXIVClientStructs\FFXIVClientStructs.csproj" />
+    <ProjectReference Include="..\FFXIVClientStructs\FFXIVClientStructs\FFXIVClientStructs.csproj">
+      <Private>false</Private>
+    </ProjectReference>
 
     <Reference Include="Dalamud">
       <HintPath>$(DalamudLibPath)Dalamud.dll</HintPath>
@@ -93,11 +97,11 @@
     <EmbeddedResource Include="Pathfinding\ObstacleMaps\*" />
   </ItemGroup>
 
-  <Target Name="CopyOnlyPInvoke" AfterTargets="Build" Condition=" '$(CopyLocalLockFileAssemblies)' != 'true' ">
+  <Target Name="CleanupOutput" AfterTargets="Build" BeforeTargets="DalamudPackage">
     <ItemGroup>
-      <_PInvokeFromNuGet Include="@(RuntimeCopyLocalItems)" Condition="'%(RuntimeCopyLocalItems.NuGetPackageId)' == 'PInvoke.User32' &#xD;&#xA;                                   and $([System.String]::Copy('%(RuntimeCopyLocalItems.Extension)').ToLower()) == '.dll'" />
+      <_ExtraOutputFiles Include="$(OutputPath)*" Exclude="$(OutputPath)BossModReborn.*;$(OutputPath)DefaultRotationPresets.json;$(OutputPath)PInvoke.User32.dll" />
     </ItemGroup>
-    <Copy SourceFiles="@(_PInvokeFromNuGet)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
+    <Delete Files="@(_ExtraOutputFiles)" />
   </Target>
   
 </Project>
